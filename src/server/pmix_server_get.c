@@ -61,6 +61,15 @@
 
 #include "pmix_server_ops.h"
 
+#include <time.h>
+#define GET_TS ({ \
+    struct timespec ts;                     \
+    double ret;                             \
+    clock_gettime(CLOCK_MONOTONIC, &ts);    \
+    ret = ts.tv_sec + 1E-9 * ts.tv_nsec;    \
+    ret;                                    \
+})
+
 extern pmix_server_module_t pmix_host_server;
 
 typedef struct {
@@ -83,6 +92,8 @@ static void dcd_con(pmix_dmdx_reply_caddy_t *p)
 }
 PMIX_CLASS_INSTANCE(pmix_dmdx_reply_caddy_t,
                    pmix_object_t, dcd_con, NULL);
+
+extern double *my_dmdx_ts[2];
 
 
 static void dmdx_cbfunc(pmix_status_t status, const char *data,
@@ -245,6 +256,7 @@ pmix_status_t pmix_server_get(pmix_buffer_t *buf,
      * resource manager server to please get the info for us from
      * whomever is hosting the target process */
     if (NULL != pmix_host_server.direct_modex) {
+        my_dmdx_ts[0][lcd->proc.rank] = GET_TS;        
         rc = pmix_host_server.direct_modex(&lcd->proc, info, ninfo, dmdx_cbfunc, lcd);
     } else {
         /* if we don't have direct modex feature, just respond with "not found" */
@@ -341,6 +353,7 @@ void pmix_pending_nspace_requests(pmix_nspace_t *nptr)
          * corresponding direct modex request */
         if( !found ){
             if( NULL != pmix_host_server.direct_modex ){
+                my_dmdx_ts[0][cd->proc.rank] = GET_TS;
                 pmix_host_server.direct_modex(&cd->proc, cd->info, cd->ninfo, dmdx_cbfunc, cd);
             } else {
                 pmix_dmdx_request_t *req, *req_next;
@@ -522,6 +535,9 @@ static void _process_dmdx_reply(int fd, short args, void *cbdata)
                     "[%s:%d] process dmdx reply from %s:%d",
                     __FILE__, __LINE__,
                     caddy->lcd->proc.nspace, caddy->lcd->proc.rank);
+
+    /* Store dmdx receive time */
+    my_dmdx_ts[1][caddy->lcd->proc.rank] = GET_TS;
 
     /* find the nspace object for this client */
     nptr = NULL;

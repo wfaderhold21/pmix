@@ -61,6 +61,10 @@
 
 #include "pmix_server_ops.h"
 
+
+double *my_dmdx_ts[2];
+int my_dmdx_size = 0;
+
 // global variables
 pmix_server_globals_t pmix_server_globals = {{{0}}};
 
@@ -417,11 +421,33 @@ PMIX_EXPORT pmix_status_t PMIx_server_finalize(void)
     /* cleanup the rendezvous file */
     unlink(myaddress.sun_path);
 
+    {
+        char *dump_on = getenv("MY_PMIX_DMDX_DUMP");
+        if( NULL != dump_on ){
+            char hname[2048];
+            int i;
+            gethostname(hname, 2047);
+            FILE *fp = fopen(hname, "a");
+            for(i=0; i < my_dmdx_size; i++){
+                if( my_dmdx_ts[0][i] != 0 ){
+                    fprintf(fp, "Request for rank=%d data in %lf sec ( %lf - %lf )\n", 
+                        i, my_dmdx_ts[1][i] - my_dmdx_ts[0][i],
+                        my_dmdx_ts[0][i], my_dmdx_ts[1][i] );
+                }
+            }
+            fclose(fp);
+        }
+        free(my_dmdx_ts[0]);
+        free(my_dmdx_ts[1]);
+    }
+
+
     cleanup_server_state();
     pmix_output_verbose(2, pmix_globals.debug_output,
                         "pmix:server finalize complete");
     return PMIX_SUCCESS;
 }
+
 
 static void _register_nspace(int sd, short args, void *cbdata)
 {
@@ -480,6 +506,16 @@ static void _register_nspace(int sd, short args, void *cbdata)
                             "pmix:server _register_nspace recording %s",
                             cd->info[i].key);
 
+        if (0 == strcmp(cd->info[i].key, PMIX_JOB_SIZE)) {
+            if ( PMIX_UINT32 != cd->info[i].value.type) {
+                PMIX_ERROR_LOG(PMIX_ERR_BAD_PARAM);
+                abort();
+            }
+            size_t proc_num = cd->info[i].value.data.uint32;
+            my_dmdx_ts[0] = calloc(proc_num, sizeof(double));   
+            my_dmdx_ts[1] = calloc(proc_num, sizeof(double));   
+            my_dmdx_size = proc_num;
+        }
         if (0 == strcmp(cd->info[i].key, PMIX_NODE_MAP)) {
             /* parse the regex to get the argv array of node names */
             if (PMIX_SUCCESS != (rc = pmix_regex_parse_nodes(cd->info[i].value.data.string, &nodes))) {
@@ -629,6 +665,8 @@ static void _deregister_nspace(int sd, short args, void *cbdata)
     pmix_output_verbose(2, pmix_globals.debug_output,
                         "pmix:server _deregister_nspace %s",
                         cd->proc.nspace);
+
+
 
     /* see if we already have this nspace */
     PMIX_LIST_FOREACH(nptr, &pmix_globals.nspaces, pmix_nspace_t) {
