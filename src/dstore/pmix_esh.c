@@ -2192,7 +2192,7 @@ static size_t put_data_to_the_end(ns_track_elem_t *ns_info, seg_desc_t *dataseg,
 static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t *kval, rank_meta_info **rinfo, int data_exist)
 {
     size_t offset, size, kval_cnt;
-    pmix_buffer_t *buffer;
+    pmix_buffer_t buffer;
     pmix_status_t rc;
     seg_desc_t *datadesc;
     uint8_t *addr;
@@ -2203,22 +2203,22 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
 
     datadesc = ns_info->data_seg;
     /* pack value to the buffer */
-    buffer = PMIX_NEW(pmix_buffer_t);
-    if (PMIX_SUCCESS != (rc = pmix_bfrop.pack(buffer, kval->value, 1, PMIX_VALUE))) {
-        PMIX_RELEASE(buffer);
+    PMIX_CONSTRUCT(&buffer, pmix_buffer_t);
+    if (PMIX_SUCCESS != (rc = pmix_bfrop.pack(&buffer, kval->value, 1, PMIX_VALUE))) {
+        PMIX_DESTRUCT(&buffer);
         PMIX_ERROR_LOG(rc);
         return rc;
     }
-    size = buffer->bytes_used;
+    size = buffer.bytes_used;
 
     if (0 == data_exist) {
         /* there is no data blob for this rank yet, so add it. */
         size_t free_offset;
         free_offset = get_free_offset(datadesc);
-        offset = put_data_to_the_end(ns_info, datadesc, kval->key, buffer->base_ptr, size);
+        offset = put_data_to_the_end(ns_info, datadesc, kval->key, buffer.base_ptr, size);
         if (0 == offset) {
             /* this is an error */
-            PMIX_RELEASE(buffer);
+            PMIX_DESTRUCT(&buffer);
             PMIX_ERROR_LOG(PMIX_ERROR);
             return PMIX_ERROR;
         }
@@ -2246,7 +2246,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
         /* there is data blob for this rank */
         addr = _get_data_region_by_offset(datadesc, (*rinfo)->offset);
         if (NULL == addr) {
-            PMIX_RELEASE(buffer);
+            PMIX_DESTRUCT(&buffer);
             PMIX_ERROR_LOG(PMIX_ERROR);
             return rc;
         }
@@ -2275,7 +2275,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
                     /* go to next item, updating address */
                     addr = _get_data_region_by_offset(datadesc, offset);
                     if (NULL == addr) {
-                        PMIX_RELEASE(buffer);
+                        PMIX_DESTRUCT(&buffer);
                         PMIX_ERROR_LOG(PMIX_ERROR);
                         return rc;
                     }
@@ -2305,7 +2305,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
                                 __FILE__, __LINE__, __func__, rank, data_exist, kval->key, kval->value->type));
                     /* replace old data with new one. */
                     memset(ESH_DATA_PTR(addr), 0, ESH_DATA_SIZE(addr, ESH_DATA_PTR(addr)));
-                    memcpy(ESH_DATA_PTR(addr), buffer->base_ptr, size);
+                    memcpy(ESH_DATA_PTR(addr), buffer.base_ptr, size);
                     addr += ESH_KV_SIZE(addr);
                     add_to_the_end = 0;
                     break;
@@ -2331,9 +2331,9 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
             (*rinfo)->count++;
             free_offset = get_free_offset(datadesc);
             /* add to the end */
-            offset = put_data_to_the_end(ns_info, datadesc, kval->key, buffer->base_ptr, size);
+            offset = put_data_to_the_end(ns_info, datadesc, kval->key, buffer.base_ptr, size);
             if (0 == offset) {
-                PMIX_RELEASE(buffer);
+                PMIX_DESTRUCT(&buffer);
                 PMIX_ERROR_LOG(PMIX_ERROR);
                 return PMIX_ERROR;
             }
@@ -2364,9 +2364,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
                         __FILE__, __LINE__, __func__, rank, data_exist, kval->key));
         }
     }
-    buffer->base_ptr = NULL;
-    buffer->bytes_used = 0;
-    PMIX_RELEASE(buffer);
+    PMIX_DESTRUCT(&buffer);
     return rc;
 }
 
