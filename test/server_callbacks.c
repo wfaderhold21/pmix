@@ -126,6 +126,11 @@ pmix_status_t abort_fn(const pmix_proc_t *proc, void *server_object,
     return PMIX_SUCCESS;
 }
 
+static void fence_release(void *data)
+{
+    free(data);
+}
+
 pmix_status_t fencenb_fn(const pmix_proc_t procs[], size_t nprocs,
                const pmix_info_t info[], size_t ninfo,
                char *data, size_t ndata,
@@ -140,8 +145,12 @@ pmix_status_t fencenb_fn(const pmix_proc_t procs[], size_t nprocs,
      * yet, so we'll just respond right away and
      * return what we were given */
 
+    /* all real RMs copy this data somewhere locally */
+    char *ptr = malloc(ndata);
+    memcpy(ptr, data, ndata);
+
     if (NULL != cbfunc) {
-        cbfunc(PMIX_SUCCESS, data, ndata, cbdata, NULL, NULL);
+        cbfunc(PMIX_SUCCESS, ptr, ndata, cbdata, fence_release, ptr);
     }
     return PMIX_SUCCESS;
 }

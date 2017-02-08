@@ -253,6 +253,12 @@ void errhandler(size_t evhdlr_registration_id,
                 pmix_event_notification_cbfunc_fn_t cbfunc,
                 void *cbdata)
 {
+    if( (PMIX_ERR_UNREACH == status) ||  (PMIX_ERR_LOST_CONNECTION_TO_SERVER == status) ){
+        /* Received because some clients are disconnecting dring
+         * normal execution
+         */
+        return;
+    }
     TEST_ERROR((" PMIX server event handler with status = %d", status));
     /* notify clients of error */
     PMIx_Notify_event(status, source,

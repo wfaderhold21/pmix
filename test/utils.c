@@ -17,6 +17,11 @@
 #include "pmix_server.h"
 #include "cli_stages.h"
 
+#define INFO_KV_SET(kv, _key, type, val) {               \
+    (void)strncpy((kv)->key, _key, PMIX_MAX_KEYLEN);       \
+    PMIX_VAL_SET(&(kv)->value, type, val);              \
+}
+
 static void release_cb(pmix_status_t status, void *cbdata)
 {
     int *ptr = (int*)cbdata;
@@ -45,53 +50,93 @@ static void fill_seq_ranks_array(size_t nprocs, int base_rank, char **ranks)
     }
 }
 
-static void set_namespace(int nprocs, char *ranks, char *name)
+static void set_namespace(int nprocs, char *ranks, char *name, int nproc_tot)
 {
     size_t ninfo;
     pmix_info_t *info;
-    ninfo = 8;
+    int n;
+
+    ninfo = 8 + nproc_tot;
     char *regex, *ppn;
 
     PMIX_INFO_CREATE(info, ninfo);
-    (void)strncpy(info[0].key, PMIX_UNIV_SIZE, PMIX_MAX_KEYLEN);
-    info[0].value.type = PMIX_UINT32;
-    info[0].value.data.uint32 = nprocs;
 
-    (void)strncpy(info[1].key, PMIX_SPAWNED, PMIX_MAX_KEYLEN);
-    info[1].value.type = PMIX_UINT32;
-    info[1].value.data.uint32 = 0;
-
-    (void)strncpy(info[2].key, PMIX_LOCAL_SIZE, PMIX_MAX_KEYLEN);
-    info[2].value.type = PMIX_UINT32;
-    info[2].value.data.uint32 = nprocs;
-
-    (void)strncpy(info[3].key, PMIX_LOCAL_PEERS, PMIX_MAX_KEYLEN);
-    info[3].value.type = PMIX_STRING;
-    info[3].value.data.string = strdup(ranks);
+    INFO_KV_SET(&info[0], PMIX_UNIV_SIZE, uint32_t, /*nproc_tot*/ nprocs);
+    INFO_KV_SET(&info[1], PMIX_SPAWNED, uint32_t, 0);
+    INFO_KV_SET(&info[2], PMIX_LOCAL_SIZE, uint32_t, nprocs);
+    INFO_KV_SET(&info[3], PMIX_LOCAL_PEERS, string, ranks);
 
     PMIx_generate_regex(NODE_NAME, &regex);
-    (void)strncpy(info[4].key, PMIX_NODE_MAP, PMIX_MAX_KEYLEN);
-    info[4].value.type = PMIX_STRING;
-    info[4].value.data.string = regex;
+    INFO_KV_SET(&info[4], PMIX_NODE_MAP, string, regex);
+    free(regex);
 
     PMIx_generate_ppn(ranks, &ppn);
-    (void)strncpy(info[5].key, PMIX_PROC_MAP, PMIX_MAX_KEYLEN);
-    info[5].value.type = PMIX_STRING;
-    info[5].value.data.string = ppn;
+    INFO_KV_SET(&info[5], PMIX_PROC_MAP, string, ppn);
+    free(ppn);
 
-    (void)strncpy(info[6].key, PMIX_JOB_SIZE, PMIX_MAX_KEYLEN);
-    info[6].value.type = PMIX_UINT32;
-    info[6].value.data.uint32 = nprocs;
+    INFO_KV_SET(&info[6], PMIX_JOB_SIZE, uint32_t, /*nproc_tot*/ nprocs);
+    INFO_KV_SET(&info[7], PMIX_APPNUM, uint32_t, 0);
 
-    (void)strncpy(info[7].key, PMIX_APPNUM, PMIX_MAX_KEYLEN);
-    info[7].value.type = PMIX_UINT32;
-    info[7].value.data.uint32 = getpid ();
+    /* emulate more procs tnan we have
+     * to stress dstore
+     */
+    for (n=0; n < nproc_tot; n++) {
+        pmix_info_t *kvp = &(info[8 + n]);
+        pmix_info_t *info1;
+        char hname[256];
+        int count = 5, k = 0;
+        PMIX_INFO_CREATE(info1, count);
 
-    int in_progress = 1, rc;
-    if (PMIX_SUCCESS == (rc = PMIx_server_register_nspace(name, nprocs, info, ninfo, release_cb, &in_progress))) {
+        strcpy(kvp->key, PMIX_PROC_DATA);
+        kvp->value.type = PMIX_DATA_ARRAY;
+        kvp->value.data.darray = (pmix_data_array_t*)calloc(1, sizeof(pmix_data_array_t));
+        kvp->value.data.darray->type = PMIX_INFO;
+        kvp->value.data.darray->array = (void*)info1;
+        kvp->value.data.darray->size = count;
+
+        /* must start with rank */
+        INFO_KV_SET(&info1[k], PMIX_RANK, int, n);
+        k++;
+        INFO_KV_SET(&info1[k], PMIX_LOCAL_RANK, uint16_t, n % nprocs);
+        k++;
+        INFO_KV_SET(&info1[k], PMIX_NODE_RANK, uint32_t, n / nprocs);
+        k++;
+        INFO_KV_SET(&info1[k], PMIX_NODEID, uint32_t, n / nprocs);
+        k++;
+        sprintf(hname,"cluster-node-%d",n / nprocs);
+        INFO_KV_SET(&info1[k], PMIX_HOSTNAME, string, hname);
+    }
+
+    {
+        int delay = 0;
+        while(delay ){
+            sleep(1);
+        }
+    }
+
+    volatile int in_progress = 1, rc;
+    if (PMIX_SUCCESS == (rc = PMIx_server_register_nspace(name, nprocs, info, ninfo, release_cb, (void*)&in_progress))) {
         PMIX_WAIT_FOR_COMPLETION(in_progress);
     }
+
     PMIX_INFO_FREE(info, ninfo);
+}
+
+void dereg_namespace(void)
+{
+    volatile int in_progress = 1;
+    char nspace[PMIX_MAX_NSLEN];
+    (void)snprintf(nspace, PMIX_MAX_NSLEN, "%s-%d", TEST_NAMESPACE, 0);
+
+    {
+        int delay = 0;
+        while( delay ){
+            sleep(1);
+        }
+    }
+
+    PMIx_server_deregister_nspace(nspace, release_cb, (void*)&in_progress);
+    PMIX_WAIT_FOR_COMPLETION(in_progress);
 }
 
 void set_client_argv(test_params *params, char ***argv)
@@ -187,7 +232,7 @@ int launch_clients(int num_procs, char *binary, char *** client_env, char ***bas
         return PMIX_ERROR;
     }
     (void)snprintf(proc.nspace, PMIX_MAX_NSLEN, "%s-%d", TEST_NAMESPACE, num_ns);
-    set_namespace(num_procs, ranks, proc.nspace);
+    set_namespace(num_procs, ranks, proc.nspace, 4096 * 64);
     if (NULL != ranks) {
         free(ranks);
     }

@@ -50,6 +50,12 @@ static void errhandler(size_t evhdlr_registration_id,
                        pmix_event_notification_cbfunc_fn_t cbfunc,
                        void *cbdata)
 {
+    if( (PMIX_ERR_UNREACH == status) ||  (PMIX_ERR_LOST_CONNECTION_TO_SERVER == status) ){
+        /* Received because some clients are disconnecting dring
+         * normal execution
+         */
+        return;
+    }
     TEST_ERROR(("PMIX client: Error handler with status = %d", status))
 }
 
@@ -124,6 +130,24 @@ int main(int argc, char **argv)
         exit(0);
     }
 
+    {
+        int i;
+        for(i=0; i<4096*64; i++){
+            pmix_proc_t proc;
+            strcpy(proc.nspace, myproc.nspace);
+            proc.rank = i;
+            int rc = PMIx_Get(&proc, PMIX_NODE_RANK, NULL, 0, &val);
+            if( PMIX_SUCCESS != rc ){
+                printf("%d: can't get data about %d\n", myproc.rank, i);
+            }
+            if( PMIX_UINT32 != val->type){
+                printf("%d: bad type of get data about %d\n", myproc.rank, i);
+            }
+            if( val->data.uint32 != ((uint32_t)i / 4 )){
+                printf("%d: bad type node rank of %d\n", myproc.rank, i);
+            }
+        }
+    }
     TEST_VERBOSE(("rank %d: Universe size check: PASSED", myproc.rank));
 
     if( NULL != params.nspace && 0 != strcmp(myproc.nspace, params.nspace) ) {

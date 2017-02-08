@@ -20,3 +20,4 @@
 
 void set_client_argv(test_params *params, char ***argv);
 int launch_clients(int num_procs, char *binary, char *** client_env, char ***client_argv);
+void dereg_namespace(void);

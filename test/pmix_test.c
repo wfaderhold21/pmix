@@ -89,6 +89,13 @@ int main(int argc, char **argv)
     info[0].value.type = PMIX_UINT32;
     info[0].value.data.uint32 = 0666;
 
+{
+    int delay = 0;
+    while( delay ){
+        sleep(1);
+    }
+}
+
     if (PMIX_SUCCESS != (rc = PMIx_server_init(&mymodule, info, 1))) {
         TEST_ERROR(("Init failed with error %d", rc));
         FREE_TEST_PARAMS(params);
@@ -184,6 +191,8 @@ int main(int argc, char **argv)
 
     pmix_argv_free(client_argv);
     pmix_argv_free(client_env);
+
+    dereg_namespace();
 
     /* deregister the errhandler */
     PMIx_Deregister_event_handler(0, op_callbk, NULL);
