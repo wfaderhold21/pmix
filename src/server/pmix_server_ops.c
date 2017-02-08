@@ -615,6 +615,7 @@ pmix_status_t pmix_server_fence(pmix_server_caddy_t *cd,
         pmix_host_server.fence_nb(trk->pcs, trk->npcs,
                                   trk->info, trk->ninfo,
                                   data, sz, trk->modexcbfunc, trk);
+        free(data);
     }
 
  cleanup:
