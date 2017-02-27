@@ -12,6 +12,7 @@
  * Copyright (c) 2007      Sun Microsystems, Inc.  All rights reserverd.
  * Copyright (c) 2016      Research Organization for Information Science
  *                         and Technology (RIST). All rights reserved.
+ * Copyright (c) 2017      Intel, Inc. All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -28,7 +29,7 @@
 
 #define ASI_P "0x80"
 
-#define MEMBAR(type) __asm__  __volatile__ ("membar " type : : : "memory")
+#define PMIXMEMBAR(type) __asm__  __volatile__ ("membar " type : : : "memory")
 
 
 /**********************************************************************
@@ -52,19 +53,19 @@
 
 static inline void pmix_atomic_mb(void)
 {
-    MEMBAR("#LoadLoad | #LoadStore | #StoreStore | #StoreLoad");
+    PMIXMEMBAR("#LoadLoad | #LoadStore | #StoreStore | #StoreLoad");
 }
 
 
 static inline void pmix_atomic_rmb(void)
 {
-    MEMBAR("#LoadLoad");
+    PMIXMEMBAR("#LoadLoad");
 }
 
 
 static inline void pmix_atomic_wmb(void)
 {
-    MEMBAR("#StoreStore");
+    PMIXMEMBAR("#StoreStore");
 }
 
 static inline void pmix_atomic_isync(void)
