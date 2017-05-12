@@ -174,6 +174,9 @@ int main(int argc, char **argv)
 
     if( test_abort ){
         TEST_ERROR(("Test was aborted!"));
+        /* do not simply kill the clients as that generates
+         * event notifications which these tests then print
+         * out, flooding the log */
       //  cli_kill_all();
         test_fail = 1;
     }

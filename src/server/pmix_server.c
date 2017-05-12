@@ -1771,7 +1771,7 @@ static void _mdxcbfunc(int sd, short argc, void *cbdata)
     pmix_buffer_t xfer, *reply, bkt;
     pmix_byte_object_t bo, bo2;
     pmix_server_caddy_t *cd;
-    pmix_status_t rc = PMIX_SUCCESS;
+    pmix_status_t rc = PMIX_SUCCESS, ret;
     pmix_nspace_caddy_t *nptr;
     pmix_list_t nslist;
     int32_t cnt = 1;
@@ -1895,9 +1895,9 @@ static void _mdxcbfunc(int sd, short argc, void *cbdata)
             break;
         }
         /* setup the reply, starting with the returned status */
-        PMIX_BFROPS_PACK(rc, cd->peer, reply, &rc, 1, PMIX_STATUS);
-        if (PMIX_SUCCESS != rc) {
-            PMIX_ERROR_LOG(rc);
+        PMIX_BFROPS_PACK(ret, cd->peer, reply, &rc, 1, PMIX_STATUS);
+        if (PMIX_SUCCESS != ret) {
+            PMIX_ERROR_LOG(ret);
             goto cleanup;
         }
         pmix_output_verbose(2, pmix_globals.debug_output,
