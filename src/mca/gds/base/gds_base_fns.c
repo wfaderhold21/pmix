@@ -1,7 +1,7 @@
 /* -*- Mode: C; c-basic-offset:4 ; indent-tabs-mode:nil -*- */
 /*
  * Copyright (c) 2015-2017 Intel, Inc. All rights reserved.
- * Copyright (c) 2016      Mellanox Technologies, Inc.
+ * Copyright (c) 2016-2017 Mellanox Technologies, Inc.
  *                         All rights reserved.
  *
  * $COPYRIGHT$
@@ -38,15 +38,35 @@ pmix_gds_base_module_t* pmix_gds_base_assign_module(pmix_info_t *info, size_t ni
     pmix_gds_base_active_module_t *active;
     pmix_gds_base_module_t *mod = NULL;
     int pri, priority = -1;
+    char *mod_name = NULL;
 
     if (!pmix_gds_globals.initialized) {
         return NULL;
     }
 
+    if (NULL != info) {
+        int n;
+        for (n=0; n < ninfo; n++) {
+            if (0 == strncmp(info[n].key, PMIX_GDS_MODULE, PMIX_MAX_KEYLEN)) {
+                mod_name = info[n].value.data.string;
+                break;
+            }
+        }
+    }
+
+
     PMIX_LIST_FOREACH(active, &pmix_gds_globals.actives, pmix_gds_base_active_module_t) {
         if (NULL == active->module->assign_module) {
             continue;
         }
+
+        /* If particular module name was specified - ignore all others */
+        if( mod_name ){
+            if( strcmp(mod_name, active->module->name) ){
+                continue;
+            }
+        }
+
         if (PMIX_SUCCESS == active->module->assign_module(info, ninfo, &pri)) {
             if (pri < 0) {
                 /* use the default priority from the component */
@@ -54,6 +74,7 @@ pmix_gds_base_module_t* pmix_gds_base_assign_module(pmix_info_t *info, size_t ni
             }
             if (priority < pri) {
                 mod = active->module;
+                priority = pri;
             }
         }
     }
