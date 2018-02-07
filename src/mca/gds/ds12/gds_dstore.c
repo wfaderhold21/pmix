@@ -299,9 +299,9 @@ __extension__ ({                                            \
     ret;                                                    \
 })
 
-#define _ESH_WRLOCK(rwlock)
-#define _ESH_RDLOCK(rwlock)
-#define _ESH_UNLOCK(rwlock)
+#define _ESH_WRLOCK(rwlock) (0)
+#define _ESH_RDLOCK(rwlock) (0)
+#define _ESH_UNLOCK(rwlock) (0)
 #endif
 
 #ifdef ESH_FCNTL_LOCK
