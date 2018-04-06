@@ -2887,7 +2887,8 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
     ns_map_data_t *ns_map = NULL;
     uint32_t num_forked, lock_idx;
     char str[128];
-
+    int i;
+ 
     pmix_output_verbose(2, pmix_gds_base_framework.framework_output,
                         "gds: dstore setup fork");
 
@@ -2919,7 +2920,15 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
         PMIX_ERROR_LOG(rc);
     }
 
-    num_forked = _ESH_SESSION_numforked(ns_map->tbl_idx);
+    num_forked = 0;
+    char **env_my = *env;
+    for(i=0; env_my[i]; i++){
+        if( strstr(env_my[i],"PMIX_RANK=") ) {
+            sscanf(env_my[i] + strlen("PMIX_RANK="), "%u", &num_forked);
+            break;
+        }
+    }
+
     if( lock_distr == 0 ) {
         /* Round robin distribution */
         lock_idx = num_forked % _ESH_SESSION_numlocks(ns_map->tbl_idx);
