@@ -83,13 +83,13 @@ PMIX_EXPORT pmix_status_t PMIx_Get(const pmix_proc_t *proc, const char key[],
     pmix_cb_t *cb;
     pmix_status_t rc;
 
-    PMIX_ACQUIRE_THREAD(&pmix_global_lock);
+//    PMIX_ACQUIRE_THREAD(&pmix_global_lock);
 
-    if (pmix_globals.init_cntr <= 0) {
-        PMIX_RELEASE_THREAD(&pmix_global_lock);
-        return PMIX_ERR_INIT;
-    }
-    PMIX_RELEASE_THREAD(&pmix_global_lock);
+//    if (pmix_globals.init_cntr <= 0) {
+//        PMIX_RELEASE_THREAD(&pmix_global_lock);
+//        return PMIX_ERR_INIT;
+//    }
+//    PMIX_RELEASE_THREAD(&pmix_global_lock);
 
     /* create a callback object as we need to pass it to the
      * recv routine so we know which callback to use when
