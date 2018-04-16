@@ -2899,18 +2899,13 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
                 PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
                 int cnt = 1;
                 /* unpack value for this key from the buffer. */
-                PMIX_VALUE_CONSTRUCT(&val);
-                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, &val, &cnt, PMIX_VALUE);
+                *kvs = PMIX_NEW(pmix_value_t);
+                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, kvs, &cnt, PMIX_VALUE);
                 if (PMIX_SUCCESS != rc) {
                     PMIX_ERROR_LOG(rc);
                     goto done;
                 }
-                PMIX_BFROPS_COPY(rc, _client_peer(), (void**)kvs, &val, PMIX_VALUE);
-                if (PMIX_SUCCESS != rc) {
-                    PMIX_ERROR_LOG(rc);
-                    goto done;
-                }
-                PMIX_VALUE_DESTRUCT(&val);
+
                 buffer.base_ptr = NULL;
                 buffer.bytes_used = 0;
                 PMIX_DESTRUCT(&buffer);
