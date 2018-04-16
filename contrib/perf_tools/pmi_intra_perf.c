@@ -224,7 +224,8 @@ int main(int argc, char **argv)
     fence_time += GET_TS - start;
 
 
-
+int z;
+for(z=0; z<1000;z++) {
     for (cnt=0; cnt < key_count; cnt++) {
         int i;
 
@@ -286,12 +287,19 @@ int main(int argc, char **argv)
         }
     }
 
+}
     total_time = GET_TS - total_start;
 
     if (0 != get_mem_usage(&mem_pss, &mem_rss)) {
         fprintf(stderr, "Rank %d: error get memory usage", rank);
         abort();
     }
+    
+    
+    /* sync before submitting the keys */
+    
+    pmi_fence( 0 );
+
 
     if( debug_on ){
         fprintf(stderr,"%d: get: total %lf avg loc %lf rem %lf all %lf ; put: %lf %lf commit: %lf fence %lf\n",
