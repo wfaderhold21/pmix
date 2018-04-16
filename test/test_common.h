@@ -299,6 +299,35 @@ typedef struct {
     }                                                                                                               \
 } while (0)
 
+
+#define GET_fp(dtype, data, ns, r, fence_num, ind, use_same_keys, blocking, ok_notfnd) do {                        \
+    char key[50];                                                                                                   \
+    pmix_value_t val, *val_p = &val;                                                                                              \
+    pmix_proc_t foobar; \
+    SET_KEY(key, fence_num, ind, use_same_keys);                                                                    \
+    (void)strncpy(foobar.nspace, ns, PMIX_MAX_NSLEN); \
+    foobar.rank = r; \
+    TEST_VERBOSE(("%s:%d want to get from %s:%d key %s", my_nspace, my_rank, ns, r, key));                          \
+    if (PMIX_SUCCESS != (rc = PMIx_Get_fp(&foobar, key, NULL, 0, &val))) {                                         \
+        if( !( rc == PMIX_ERR_NOT_FOUND && ok_notfnd ) ){                                                       \
+            TEST_ERROR(("%s:%d: PMIx_Get failed: %d from %s:%d, key %s", my_nspace, my_rank, rc, ns, r, key));  \
+        }                                                                                                       \
+        rc = PMIX_ERROR;                                                                                        \
+    }                                                                                                           \
+    if (PMIX_SUCCESS == rc) {                                                                                       \
+        if (val_p->type != PMIX_VAL_TYPE_ ## dtype || PMIX_VAL_CMP(dtype, PMIX_VAL_FIELD_ ## dtype((val_p)), data)) {  \
+            TEST_ERROR(("%s:%u: from %s:%d Key %s value or type mismatch,"                                        \
+                        " want type %d get type %d",                                                                \
+                        my_nspace, my_rank, ns, r, key, PMIX_VAL_TYPE_ ## dtype, val_p->type));                    \
+            rc = PMIX_ERROR;                                                                                        \
+        }                                                                                                           \
+    }                                                                                                               \
+    if (PMIX_SUCCESS == rc) {                                                                                       \
+        TEST_VERBOSE(("%s:%d: GET OF %s from %s:%d SUCCEEDED", my_nspace, my_rank, key, ns, r));                 \
+    }                                                                                                               \
+} while (0)
+
+
 #define FENCE(blocking, data_ex, pcs, nprocs) do {                              \
     if( blocking ){                                                             \
         pmix_info_t *info = NULL;                                               \

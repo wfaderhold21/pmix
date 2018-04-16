@@ -327,6 +327,21 @@ typedef pmix_status_t (*pmix_gds_base_module_fetch_fn_t)(const pmix_proc_t *proc
     } while(0)
 
 
+typedef pmix_status_t (*pmix_gds_base_module_fetch_fp_fn_t)(const pmix_proc_t *proc,
+                                                         pmix_scope_t scope,
+                                                         const char *key,
+                                                         pmix_value_t *val);
+#define PMIX_GDS_FETCH_KV_FP(s, p, proc, scope, key, val)      \
+    do {                                                    \
+        pmix_gds_base_module_t *_g = (p)->nptr->compat.gds; \
+        pmix_output_verbose(1, pmix_gds_base_output,        \
+                            "[%s:%d] GDS FETCH KV WITH %s", \
+                            __FILE__, __LINE__, _g->name);  \
+        (s) = _g->fetch_fp(proc, scope,                     \
+                        key,                                \
+                        val);                               \
+    } while(0)
+
 /**
 * Add any envars to a peer's environment that the module needs
 * to communicate. The API stub will rotate across all active modules, giving
@@ -413,6 +428,7 @@ typedef struct {
     pmix_gds_base_module_store_fn_t                 store;
     pmix_gds_base_module_store_modex_fn_t           store_modex;
     pmix_gds_base_module_fetch_fn_t                 fetch;
+    pmix_gds_base_module_fetch_fp_fn_t                 fetch_fp;
     pmix_gds_base_module_setup_fork_fn_t            setup_fork;
     pmix_gds_base_module_add_nspace_fn_t            add_nspace;
     pmix_gds_base_module_del_nspace_fn_t            del_nspace;

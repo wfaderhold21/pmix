@@ -540,6 +540,11 @@ static pmix_status_t dstore_fetch(const pmix_proc_t *proc,
                                 pmix_info_t info[], size_t ninfo,
                                 pmix_list_t *kvs);
 
+static pmix_status_t dstore_fetch_fp(const pmix_proc_t *proc,
+                                    pmix_scope_t scope,
+                                    const char *key,
+                                    pmix_value_t *val);
+
 static pmix_status_t dstore_add_nspace(const char *nspace,
                                 pmix_info_t info[],
                                 size_t ninfo);
@@ -564,6 +569,7 @@ pmix_gds_base_module_t pmix_ds12_module = {
     .store = dstore_store,
     .store_modex = dstore_store_modex,
     .fetch = dstore_fetch,
+    .fetch_fp = dstore_fetch_fp,
     .setup_fork = dstore_setup_fork,
     .add_nspace = dstore_add_nspace,
     .del_nspace = dstore_del_nspace,
@@ -2546,6 +2552,244 @@ static pmix_status_t dstore_store(const pmix_proc_t *proc,
     return rc;
 }
 
+static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
+                                   const char *key, pmix_value_t *val)
+{
+    ns_seg_info_t *ns_info = NULL;
+    pmix_status_t rc = PMIX_ERROR, lock_rc;
+    ns_track_elem_t *elem;
+    rank_meta_info *rinfo = NULL;
+    size_t kval_cnt = 0;
+    seg_desc_t *meta_seg, *data_seg;
+    uint8_t *addr;
+    pmix_buffer_t buffer;
+    uint32_t nprocs;
+    pmix_rank_t cur_rank;
+    ns_map_data_t *ns_map = NULL;
+    bool all_ranks_found = true;
+    bool key_found = false;
+    size_t keyhash = 0;
+
+    PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                         "%s:%d:%s: for %s:%u look for key %s",
+                         __FILE__, __LINE__, __func__, nspace, rank, key));
+
+    if ((PMIX_RANK_UNDEF == rank) && (NULL == key)) {
+        PMIX_OUTPUT_VERBOSE((7, pmix_gds_base_framework.framework_output,
+                             "dstore: Does not support passed parameters"));
+        rc = PMIX_ERR_BAD_PARAM;
+        PMIX_ERROR_LOG(rc);
+        return rc;
+    }
+
+    PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                         "%s:%d:%s: for %s:%u look for key %s",
+                         __FILE__, __LINE__, __func__, nspace, rank, key));
+
+    if (NULL == (ns_map = _esh_session_map_search(nspace))) {
+        /* This call is issued from the the client.
+         * client must have the session, otherwise the error is fatal.
+         */
+        rc = PMIX_ERR_FATAL;
+        PMIX_ERROR_LOG(rc);
+        return rc;
+    }
+
+    if (PMIX_RANK_UNDEF == rank) {
+        ssize_t _nprocs = _get_univ_size(ns_map->name);
+        if( 0 > _nprocs ){
+            PMIX_ERROR_LOG(rc);
+            return rc;
+        }
+        nprocs = (size_t) _nprocs;
+        cur_rank = 0;
+    } else {
+        nprocs = 1;
+        cur_rank = rank;
+    }
+
+    /* grab shared lock */
+    if (PMIX_SUCCESS != (lock_rc = _ESH_RD_LOCK(ns_map->tbl_idx))) {
+        /* Something wrong with the lock. The error is fatal */
+        rc = PMIX_ERR_FATAL;
+        PMIX_ERROR_LOG(lock_rc);
+        return lock_rc;
+    }
+
+    /* First of all, we go through all initial segments and look at their field.
+     * If it's 1, then generate name of next initial segment incrementing id by one and attach to it.
+     * We need this step to synchronize initial shared segments with our local track list.
+     * Then we look for the target namespace in all initial segments.
+     * If it is found, we get numbers of meta & data segments and
+     * compare these numbers with the number of trackable meta & data
+     * segments for this namespace in the local track list.
+     * If the first number exceeds the last, or the local track list
+     * doesn't track current namespace yet, then we update it (attach
+     * to additional segments).
+     */
+
+    /* first update local information about initial segments. they can be extended, so then we need to attach to new segments. */
+    _update_initial_segment_info(ns_map);
+
+    ns_info = _get_ns_info_from_initial_segment(ns_map);
+    if (NULL == ns_info) {
+        /* no data for this namespace is found in the shared memory. */
+        PMIX_OUTPUT_VERBOSE((7, pmix_gds_base_framework.framework_output,
+                    "%s:%d:%s:  no data for ns %s is found in the shared memory.",
+                    __FILE__, __LINE__, __func__, ns_map->name));
+        rc = PMIX_ERR_PROC_ENTRY_NOT_FOUND;
+        goto done;
+    }
+
+    /* get ns_track_elem_t object for the target namespace from the local track list. */
+    elem = _get_track_elem_for_namespace(ns_map);
+    if (NULL == elem) {
+        /* Shouldn't happen! */
+        rc = PMIX_ERR_FATAL;
+        PMIX_ERROR_LOG(rc);
+        goto done;
+    }
+
+    /* need to update tracker:
+     * attach to shared memory regions for this namespace and store its info locally
+     * to operate with address and detach/unlink afterwards. */
+    rc = _update_ns_elem(elem, ns_info);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        goto done;
+    }
+
+    /* Now we have the data from meta segment for this namespace. */
+    meta_seg = elem->meta_seg;
+    data_seg = elem->data_seg;
+
+    keyhash = ESH_KNAME_HASH(key);
+
+    while (nprocs--) {
+        /* Get the rank meta info in the shared meta segment. */
+        rinfo = _get_rank_meta_info(cur_rank, meta_seg);
+        if (NULL == rinfo) {
+            PMIX_OUTPUT_VERBOSE((7, pmix_gds_base_framework.framework_output,
+                        "%s:%d:%s:  no data for this rank is found in the shared memory. rank %u",
+                        __FILE__, __LINE__, __func__, cur_rank));
+            all_ranks_found = false;
+            continue;
+        }
+        addr = _get_data_region_by_offset(data_seg, rinfo->offset);
+        if (NULL == addr) {
+            /* This means that meta-info is broken - error is fatal */
+            rc = PMIX_ERR_FATAL;
+            PMIX_ERROR_LOG(rc);
+            goto done;
+        }
+        kval_cnt = rinfo->count;
+
+        rc = PMIX_SUCCESS;
+        while (0 < kval_cnt) {
+            /* data is stored in the following format:
+             * key_val_pair {
+             *     size_t size;
+             *     char key[KNAME_LEN(addr)];
+             *     byte_t byte[size]; // should be loaded to pmix_buffer_t and unpacked.
+             * };
+             * segment_format {
+             *     key_val_pair kv_array[n];
+             *     EXTENSION slot;
+             * }
+             * EXTENSION slot which has key = EXTENSION_SLOT and a size_t value for offset
+             * to next data address for this process.
+             */
+            if (ESH_KV_INVALID(addr)) {
+                PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                            "%s:%d:%s: for rank %s:%u, skip %s region",
+                            __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_REGION_INVALIDATED));
+                /* skip it
+                 * go to next item, updating address */
+                addr += ESH_KV_SIZE(addr);
+            } else if ( ESH_KV_EXTSLOT(addr) ) {
+                size_t offset;
+                memcpy(&offset, ESH_DATA_PTR(addr), sizeof(size_t));
+                PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                            "%s:%d:%s: for rank %s:%u, reached %s with %lu value",
+                            __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_REGION_EXTENSION, offset));
+                if (0 < offset) {
+                    /* go to next item, updating address */
+                    addr = _get_data_region_by_offset(data_seg, offset);
+                    if (NULL == addr) {
+                        /* This shouldn't happen - error is fatal */
+                        rc = PMIX_ERR_FATAL;
+                        PMIX_ERROR_LOG(rc);
+                        goto done;
+                    }
+                } else {
+                    /* no more data for this rank */
+                    PMIX_OUTPUT_VERBOSE((7, pmix_gds_base_framework.framework_output,
+                                "%s:%d:%s:  no more data for this rank is found in the shared memory. rank %u key %s not found",
+                                __FILE__, __LINE__, __func__, cur_rank, key));
+                    break;
+                }
+            } else if (ESH_KNAME_MATCH(addr, key, keyhash)) {
+                PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                            "%s:%d:%s: for rank %s:%u, found target key %s",
+                            __FILE__, __LINE__, __func__, nspace, cur_rank, key));
+                /* target key is found, get value */
+                uint8_t *data_ptr = ESH_DATA_PTR(addr);
+                size_t data_size = ESH_DATA_SIZE(addr, data_ptr);
+                PMIX_CONSTRUCT(&buffer, pmix_buffer_t);
+                PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
+                int cnt = 1;
+                /* unpack value for this key from the buffer. */
+                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, val, &cnt, PMIX_VALUE);
+                if (PMIX_SUCCESS != rc) {
+                    PMIX_ERROR_LOG(rc);
+                    goto done;
+                }
+                buffer.base_ptr = NULL;
+                buffer.bytes_used = 0;
+                PMIX_DESTRUCT(&buffer);
+                key_found = true;
+                goto done;
+            } else {
+                PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                            "%s:%d:%s: for rank %s:%u, skip key %s look for key %s",
+                            __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_KNAME_PTR(addr), key));
+                /* go to next item, updating address */
+                addr += ESH_KV_SIZE(addr);
+                kval_cnt--;
+            }
+        }
+
+        if (PMIX_RANK_UNDEF == rank) {
+            cur_rank++;
+        }
+    }
+
+done:
+    /* unset lock */
+    if (PMIX_SUCCESS != (lock_rc = _ESH_RD_UNLOCK(ns_map->tbl_idx))) {
+        PMIX_ERROR_LOG(lock_rc);
+    }
+
+    if( rc != PMIX_SUCCESS ){
+        return rc;
+    }
+
+    if( key_found ){
+        /* the key is found - nothing to do */
+        return PMIX_SUCCESS;
+    }
+
+    if( !all_ranks_found ){
+        /* Not all ranks was found - need to request
+         * all of them and search again
+         */
+        rc = PMIX_ERR_PROC_ENTRY_NOT_FOUND;
+        return rc;
+    }
+    rc = PMIX_ERR_NOT_FOUND;
+    return rc;
+}
+
 static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
                                    const char *key, pmix_value_t **kvs)
 {
@@ -2762,33 +3006,33 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
                     break;
                 }
             } else if (NULL == key) {
-                PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
-                            "%s:%d:%s: for rank %s:%u, found target key %s",
-                            __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_KNAME_PTR(addr)));
+            PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
+                        "%s:%d:%s: for rank %s:%u, found target key %s",
+                        __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_KNAME_PTR(addr)));
 
-                uint8_t *data_ptr = ESH_DATA_PTR(addr);
-                size_t data_size = ESH_DATA_SIZE(addr, data_ptr);
-                PMIX_CONSTRUCT(&buffer, pmix_buffer_t);
-                PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
-                int cnt = 1;
-                /* unpack value for this key from the buffer. */
-                PMIX_VALUE_CONSTRUCT(&val);
-                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, &val, &cnt, PMIX_VALUE);
-                if (PMIX_SUCCESS != rc) {
-                    PMIX_ERROR_LOG(rc);
-                    goto done;
-                }
-                strncpy(info[kval_cnt - 1].key, ESH_KNAME_PTR(addr), ESH_KNAME_LEN((char *)addr));
-                pmix_value_xfer(&info[kval_cnt - 1].value, &val);
-                PMIX_VALUE_DESTRUCT(&val);
-                buffer.base_ptr = NULL;
-                buffer.bytes_used = 0;
-                PMIX_DESTRUCT(&buffer);
-                key_found = true;
+            uint8_t *data_ptr = ESH_DATA_PTR(addr);
+            size_t data_size = ESH_DATA_SIZE(addr, data_ptr);
+            PMIX_CONSTRUCT(&buffer, pmix_buffer_t);
+            PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
+            int cnt = 1;
+            /* unpack value for this key from the buffer. */
+            PMIX_VALUE_CONSTRUCT(&val);
+            PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, &val, &cnt, PMIX_VALUE);
+            if (PMIX_SUCCESS != rc) {
+                PMIX_ERROR_LOG(rc);
+                goto done;
+            }
+            strncpy(info[kval_cnt - 1].key, ESH_KNAME_PTR(addr), ESH_KNAME_LEN((char *)addr));
+            pmix_value_xfer(&info[kval_cnt - 1].value, &val);
+            PMIX_VALUE_DESTRUCT(&val);
+            buffer.base_ptr = NULL;
+            buffer.bytes_used = 0;
+            PMIX_DESTRUCT(&buffer);
+            key_found = true;
 
-                kval_cnt--;
-                addr += ESH_KV_SIZE(addr);
-            } else if (ESH_KNAME_MATCH(addr, key, keyhash)) {
+            kval_cnt--;
+            addr += ESH_KV_SIZE(addr);
+        } else if (ESH_KNAME_MATCH(addr, key, keyhash)) {
                 PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
                             "%s:%d:%s: for rank %s:%u, found target key %s",
                             __FILE__, __LINE__, __func__, nspace, cur_rank, key));
@@ -2918,6 +3162,20 @@ static pmix_status_t dstore_fetch(const pmix_proc_t *proc,
         kv->value = val;
         pmix_list_append(kvs, &kv->super);
     }
+    return rc;
+}
+
+static pmix_status_t dstore_fetch_fp(const pmix_proc_t *proc,
+                                    pmix_scope_t scope,
+                                    const char *key,
+                                    pmix_value_t *val)
+{
+    pmix_status_t rc = PMIX_SUCCESS;
+
+    pmix_output_verbose(2, pmix_gds_base_framework.framework_output,
+                        "gds: dstore fetch `%s`", key == NULL ? "NULL" : key);
+
+    rc = _dstore_fetch_fp(proc->nspace, proc->rank, key, val);
     return rc;
 }
 

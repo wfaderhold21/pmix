@@ -75,7 +75,6 @@ static void _getnb_cbfunc(struct pmix_peer_t *pr,
 
 static void _value_cbfunc(pmix_status_t status, pmix_value_t *kv, void *cbdata);
 
-
 PMIX_EXPORT pmix_status_t PMIx_Get(const pmix_proc_t *proc, const char key[],
                                    const pmix_info_t info[], size_t ninfo,
                                    pmix_value_t **val)
@@ -111,6 +110,30 @@ PMIX_EXPORT pmix_status_t PMIx_Get(const pmix_proc_t *proc, const char key[],
     pmix_output_verbose(2, pmix_globals.debug_output,
                         "pmix:client get completed");
 
+    return rc;
+}
+
+PMIX_EXPORT pmix_status_t PMIx_Get_fp(const pmix_proc_t *proc, const char key[],
+                                   const pmix_info_t info[], size_t ninfo,
+                                   pmix_value_t *val)
+{
+    pmix_scope_t scope;
+    pmix_status_t rc;
+
+    /* scan the incoming directives */
+    if (NULL != info) {
+        unsigned n;
+        for (n=0; n < ninfo; n++) {
+            if (0 == strncmp(info[n].key, PMIX_DATA_SCOPE, PMIX_MAX_KEYLEN)) {
+                scope = info[n].value.data.scope;
+            }
+        }
+    }
+    PMIX_GDS_FETCH_KV_FP(rc,  pmix_client_globals.myserver, proc, scope, key, val);
+
+    /* create a callback object as we need to pass it to the
+     * recv routine so we know which callback to use when
+     * the return message is recvd */
     return rc;
 }
 
