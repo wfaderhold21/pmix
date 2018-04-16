@@ -113,7 +113,7 @@ typedef struct {
 typedef struct {
     pmix_value_array_t super;
     ns_map_data_t ns_map;
-    size_t num_meta_seg;
+    size_t  num_meta_seg;
     size_t num_data_seg;
     seg_desc_t *meta_seg;
     seg_desc_t *data_seg;
