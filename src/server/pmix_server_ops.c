@@ -166,8 +166,6 @@ pmix_status_t pmix_server_commit(pmix_peer_t *peer, pmix_buffer_t *buf)
      * representing a different scope. These need to be locally
      * stored separately so we can provide required data based
      * on the requestor's location */
-
-
     cnt = 1;
     PMIX_BFROPS_UNPACK(rc, peer, buf, &scope, &cnt, PMIX_SCOPE);
     while (PMIX_SUCCESS == rc) {

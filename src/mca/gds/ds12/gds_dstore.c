@@ -128,32 +128,27 @@ __extension__ ({                                            \
     name_ptr;                                               \
 })
 
-//#define ESH_KV_INVALID(addr)                                \
-//__extension__ ({                                            \
-//    int ret = 0;                                            \
-//    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
-//        ret = (0 == strncmp(ESH_REGION_INVALIDATED, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
-//    } else {                                                \
-//        ret = ESH_KV_INVALID_V20(addr);                     \
-//    }                                                       \
-//    ret;                                               \
-//})
+#define ESH_KV_INVALID(addr)                                \
+__extension__ ({                                            \
+    int ret = 0;                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        ret = (0 == strncmp(ESH_REGION_INVALIDATED, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
+    } else {                                                \
+        ret = ESH_KV_INVALID_V20(addr);                     \
+    }                                                       \
+    ret;                                               \
+})
 
-#define ESH_KV_INVALID(addr) ESH_KV_INVALID_V20(addr)
-
-//#define ESH_KV_EXTSLOT(addr)                                \
-//__extension__ ({                                            \
-//    int ret = 0;                                            \
-//    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
-//        ret = (0 == strncmp(ESH_REGION_EXTENSION, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
-//    } else {                                                \
-//        ret = ESH_KV_EXTSLOT_V20(addr);                     \
-//    }                                                       \
-//    ret;                                               \
-//})
-
-
-#define ESH_KV_EXTSLOT(addr) ESH_KV_EXTSLOT_V20(addr)
+#define ESH_KV_EXTSLOT(addr)                                \
+__extension__ ({                                            \
+    int ret = 0;                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        ret = (0 == strncmp(ESH_REGION_EXTENSION, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
+    } else {                                                \
+        ret = ESH_KV_EXTSLOT_V20(addr);                     \
+    }                                                       \
+    ret;                                               \
+})
 
 #define ESH_KV_INVALIDATE(addr)                                \
 __extension__ ({                                            \
