@@ -204,6 +204,10 @@ PMIX_EXPORT pmix_status_t PMIx_Get(const pmix_proc_t *proc, const char key[],
                                    const pmix_info_t info[], size_t ninfo,
                                    pmix_value_t **val);
 
+PMIX_EXPORT pmix_status_t PMIx_Get_fp(const pmix_proc_t *proc, const char key[],
+                                   const pmix_info_t info[], size_t ninfo,
+                                   pmix_value_t *val);
+
 /* A non-blocking operation version of PMIx_Get - the callback function will
  * be executed once the specified data has been _PMIx_Put_
  * by the identified process and retrieved by the local server. The info

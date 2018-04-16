@@ -98,6 +98,7 @@ pmix_gds_base_module_t pmix_hash_module = {
     .store = hash_store,
     .store_modex = hash_store_modex,
     .fetch = hash_fetch,
+    .fetch_fp = NULL,
     .setup_fork = setup_fork,
     .add_nspace = nspace_add,
     .del_nspace = nspace_del,
