@@ -2899,8 +2899,8 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
                 PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
                 int cnt = 1;
                 /* unpack value for this key from the buffer. */
-                *kvs = PMIX_NEW(pmix_value_t);
-                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, kvs, &cnt, PMIX_VALUE);
+                *kvs = malloc(sizeof(**kvs));
+                PMIX_BFROPS_UNPACK(rc, _client_peer(), &buffer, *kvs, &cnt, PMIX_VALUE);
                 if (PMIX_SUCCESS != rc) {
                     PMIX_ERROR_LOG(rc);
                     goto done;
