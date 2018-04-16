@@ -51,6 +51,12 @@
 #include "gds_dstore.h"
 #include "src/mca/pshmem/base/base.h"
 
+/* TODO: adapt to size_t size */
+#define ESH_REGION_EXTENSION_FLG    0x8000000000000000
+#define ESH_REGION_INVALIDATED_FLG  0x4000000000000000
+#define ESH_REGION_SIZE_MASK        0x3FFFFFFFFFFFFFFF
+
+
 #define ESH_REGION_EXTENSION        "EXTENSION_SLOT"
 #define ESH_REGION_INVALIDATED      "INVALIDATED"
 #define ESH_ENV_INITIAL_SEG_SIZE    "INITIAL_SEG_SIZE"
@@ -100,8 +106,6 @@ static pmix_value_array_t *_ns_track_array = NULL;
 #define _ESH_SESSION_lock(tbl_idx)         _ESH_SESSION_lockfd(tbl_idx)
 #endif
 
-#define ESH_MIN_KEY_LEN             (sizeof(ESH_REGION_INVALIDATED))
-
 #define ESH_KV_SIZE(addr)                                   \
 __extension__ ({                                            \
     size_t sz;                                              \
@@ -124,6 +128,37 @@ __extension__ ({                                            \
     name_ptr;                                               \
 })
 
+#define ESH_KV_INVALID(addr)                                \
+__extension__ ({                                            \
+    int ret = 0;                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        ret = (0 == strncmp(ESH_REGION_INVALIDATED, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
+    } else {                                                \
+        ret = ESH_KV_INVALID_V20(addr);                     \
+    }                                                       \
+    ret;                                               \
+})
+
+#define ESH_KV_EXTSLOT(addr)                                \
+__extension__ ({                                            \
+    int ret = 0;                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        ret = (0 == strncmp(ESH_REGION_EXTENSION, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr))));                 \
+    } else {                                                \
+        ret = ESH_KV_EXTSLOT_V20(addr);                     \
+    }                                                       \
+    ret;                                               \
+})
+
+#define ESH_KV_INVALIDATE(addr)                                \
+__extension__ ({                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        strncpy(ESH_KNAME_PTR(addr), ESH_REGION_INVALIDATED, ESH_KNAME_LEN(ESH_REGION_INVALIDATED));                 \
+    } else {                                                \
+        ESH_KV_INVALIDATE_V20(addr);                     \
+    }                                                       \
+})
+
 #define ESH_KNAME_LEN(key)                                  \
 __extension__ ({                                            \
     size_t len;                                             \
@@ -134,6 +169,27 @@ __extension__ ({                                            \
     }                                                       \
     len;                                                    \
 })
+
+#define ESH_KNAME_HASH(key)                                  \
+__extension__ ({                                            \
+    size_t hash = 0;                                        \
+    if (!PMIX_PROC_IS_V1(_client_peer())) {                 \
+        hash = ESH_KNAME_HASH_V20(key);    \
+    }                                                       \
+    hash;                                                    \
+})
+
+#define ESH_KNAME_MATCH(addr, key, keyhash)                 \
+__extension__ ({                                            \
+    int ret = 0;                                            \
+    if (PMIX_PROC_IS_V1(_client_peer())) {                  \
+        ret =  (0 == strncmp(ESH_KNAME_PTR(addr), key, ESH_KNAME_LEN(key)));                       \
+    } else {                                                \
+        ret = ESH_KNAME_MATCH_V20(addr, key, keyhash);     \
+    }                                                       \
+    ret;                                                    \
+})
+
 
 #define ESH_DATA_PTR(addr)                                  \
 __extension__ ({                                            \
@@ -193,28 +249,69 @@ __extension__ ({                                            \
 __extension__ ({                                            \
     size_t sz;                                              \
     memcpy(&sz, addr, sizeof(size_t));                      \
-    sz;                                                     \
+    /* drop flags in lsb's */                               \
+    (sz & ESH_REGION_SIZE_MASK);                            \
 })
+
+#define ESH_KV_INVALID_V20(addr)                            \
+__extension__ ({                                            \
+    size_t sz;                                              \
+    memcpy(&sz, addr, sizeof(size_t));                      \
+    (sz & ESH_REGION_INVALIDATED_FLG);                      \
+})
+
+#define ESH_KV_INVALIDATE_V20(addr)                            \
+__extension__ ({                                            \
+    size_t sz;                                              \
+    memcpy(&sz, addr, sizeof(size_t));                      \
+    sz |= ESH_REGION_INVALIDATED_FLG;                      \
+    memcpy(addr, &sz, sizeof(size_t));                      \
+})
+
+//#define ESH_KV_EXTSLOT_V20(addr)                            \
+//__extension__ ({                                            \
+//    size_t sz;                                              \
+//    memcpy(&sz, addr, sizeof(size_t));                      \
+//    !!(sz & ESH_REGION_EXTENSION_FLG);                      \
+//})
+
+
+inline static int ESH_KV_EXTSLOT_V20(void *addr)
+{
+    size_t sz;
+    memcpy(&sz, addr, sizeof(size_t));
+    return !!(sz & ESH_REGION_EXTENSION_FLG);
+}
+
 
 #define ESH_KNAME_PTR_V20(addr)                             \
 __extension__ ({                                            \
-    char *name_ptr = (char *)addr + sizeof(size_t);         \
+    char *name_ptr = (char *)addr + 2 * sizeof(size_t);     \
     name_ptr;                                               \
 })
 
 #define ESH_KNAME_LEN_V20(key)                              \
 __extension__ ({                                            \
-    size_t kname_len = strlen(key) + 1;                     \
-    size_t len = (kname_len < ESH_MIN_KEY_LEN) ?            \
-    ESH_MIN_KEY_LEN : kname_len;                            \
-    len;                                                    \
+    (strlen(key) + 1);                  \
 })
+
+static inline int
+ESH_KNAME_MATCH_V20(void *addr, const char *key, size_t key_hash)
+{
+    int ret = 0;
+    size_t hash;
+    memcpy(&hash, (char*)addr + sizeof(size_t), sizeof(size_t));
+    if( key_hash != hash ) {
+        return ret;
+    }
+    return (0 == strncmp(ESH_KNAME_PTR_V20(addr), key, ESH_KNAME_LEN_V20(key)));
+}
 
 #define ESH_DATA_PTR_V20(addr)                              \
 __extension__ ({                                            \
-    size_t kname_len =                                      \
-        ESH_KNAME_LEN_V20(ESH_KNAME_PTR_V20(addr));         \
-    uint8_t *data_ptr = addr + sizeof(size_t) + kname_len;  \
+    char *key_ptr = ESH_KNAME_PTR_V20(addr);                \
+    size_t kname_len = ESH_KNAME_LEN_V20(key_ptr);          \
+    uint8_t *data_ptr = addr + (key_ptr - (char*)addr) + kname_len;  \
     data_ptr;                                               \
 })
 
@@ -228,7 +325,7 @@ __extension__ ({                                            \
 #define ESH_KEY_SIZE_V20(key, size)                         \
 __extension__ ({                                            \
     size_t len =                                            \
-        sizeof(size_t) + ESH_KNAME_LEN_V20(key) + size;     \
+        2 * sizeof(size_t) + ESH_KNAME_LEN_V20(key) + size;     \
     len;                                                    \
 })
 
@@ -237,20 +334,47 @@ __extension__ ({                                            \
  * next commit
  */
 #define EXT_SLOT_SIZE_V20()                                 \
-    (ESH_KEY_SIZE_V20(ESH_REGION_EXTENSION, sizeof(size_t)))
+    (ESH_KEY_SIZE_V20("", sizeof(size_t)))
 
+static size_t _esh_hash_v20(const char *key) {
+    size_t hash = 0;
+    int i;
+    for(i=0; key[i]; i++) {
+        hash += key[i];
+    }
+    return hash;
+}
+
+#define ESH_KNAME_HASH_V20(key) _esh_hash_v20(key)
+
+
+static inline void
+_esh_put_key_v20(void *addr, char *key, void* buffer, size_t size)
+{
+    size_t flag = 0;
+    size_t hash = 0;
+    char *addr_ch = (char*)addr;
+    if( !strcmp(key, ESH_REGION_EXTENSION) ) {
+        /* we have a flag for this special key */
+        key = "";
+        flag |= ESH_REGION_EXTENSION_FLG;
+    }
+    size_t sz = ESH_KEY_SIZE_V20(key, size);
+    if( ESH_REGION_SIZE_MASK < sz ) {
+        int rc = PMIX_ERROR;
+        PMIX_ERROR_LOG(rc);
+        abort();
+    }
+    sz |= flag;
+    memcpy(addr_ch, &sz, sizeof(size_t));
+    hash = _esh_hash_v20(key);
+    memcpy(addr_ch + sizeof(size_t), &hash, sizeof(size_t));
+    strncpy(addr_ch + 2* sizeof(size_t), key, ESH_KNAME_LEN_V20(key));
+    memcpy(ESH_DATA_PTR_V20(addr), buffer, size);
+}
 
 #define ESH_PUT_KEY_V20(addr, key, buffer, size)            \
-__extension__ ({                                            \
-    size_t sz = ESH_KEY_SIZE_V20(key, size);                \
-    memcpy(addr, &sz, sizeof(size_t));                      \
-    memset(addr + sizeof(size_t), 0,                        \
-        ESH_KNAME_LEN_V20(key));                            \
-    strncpy((char *)addr + sizeof(size_t),                  \
-            key, ESH_KNAME_LEN_V20(key));                   \
-    memcpy(addr + sizeof(size_t) + ESH_KNAME_LEN_V20(key),  \
-            buffer, size);                                  \
-})
+    _esh_put_key_v20(addr, key, buffer, size)
 
 /* PMIx v1.2 dstore specific macro */
 #define ESH_KEY_SIZE_V12(key, size)                         \
@@ -1929,13 +2053,14 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
         while (0 < kval_cnt) {
             /* data is stored in the following format:
              * size_t size
+             * TODO: Fix
              * key[ESH_KNAME_LEN(addr)]
              * byte buffer containing pmix_value, should be loaded to pmix_buffer_t and unpacked.
              * next kval pair
              * .....
              * extension slot which has key = EXTENSION_SLOT and a size_t value for offset to next data address for this process.
              */
-            if (0 == strncmp(ESH_KNAME_PTR(addr), ESH_REGION_EXTENSION, ESH_KNAME_LEN(ESH_REGION_EXTENSION))) {
+            if ( ESH_KV_EXTSLOT(addr) ) {
                 memcpy(&offset, ESH_DATA_PTR(addr), sizeof(size_t));
                 if (0 < offset) {
                     PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
@@ -1961,7 +2086,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
                 if (ESH_DATA_SIZE(addr, ESH_DATA_PTR(addr)) != size) {
                 //if (1) { /* if we want to test replacing values for existing keys. */
                     /* invalidate current value and store another one at the end of data region. */
-                    strncpy(ESH_KNAME_PTR(addr), ESH_REGION_INVALIDATED, ESH_KNAME_LEN(ESH_REGION_INVALIDATED));
+                    ESH_KV_INVALIDATE(addr);
                     /* decrementing count, it will be incremented back when we add a new value for this key at the end of region. */
                     (*rinfo)->count--;
                     kval_cnt--;
@@ -1986,7 +2111,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
                             "%s:%d:%s: for rank %u, replace flag %d skip %s key, look for %s key",
                             __FILE__, __LINE__, __func__, rank, data_exist, ESH_KNAME_PTR(addr), kval->key));
                 /* Skip it: key is "INVALIDATED" or key is valid but different from target one. */
-                if (0 != strncmp(ESH_REGION_INVALIDATED, ESH_KNAME_PTR(addr), ESH_KNAME_LEN(ESH_KNAME_PTR(addr)))) {
+                if (!ESH_KV_INVALID(addr)) {
                     /* count only valid items */
                     kval_cnt--;
                 }
@@ -2013,7 +2138,7 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
              * data for different ranks, and that's why next element is EXTENSION_SLOT.
              * We put new data to the end of data region and just update EXTENSION_SLOT value by new offset.
              */
-            if (0 == strncmp(ESH_KNAME_PTR(addr), ESH_REGION_EXTENSION, ESH_KNAME_LEN(ESH_REGION_EXTENSION))) {
+            if ( ESH_KV_EXTSLOT(addr) ) {
                 PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
                             "%s:%d:%s: for rank %u, replace flag %d %s should be filled with offset %lu value",
                             __FILE__, __LINE__, __func__, rank, data_exist, ESH_REGION_EXTENSION, offset));
@@ -2525,6 +2650,7 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
     bool key_found = false;
     pmix_info_t *info = NULL;
     size_t ninfo;
+    size_t keyhash = 0;
 
     PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
                          "%s:%d:%s: for %s:%u look for key %s",
@@ -2625,6 +2751,10 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
     meta_seg = elem->meta_seg;
     data_seg = elem->data_seg;
 
+    if( NULL != key ) {
+        keyhash = ESH_KNAME_HASH(key);
+    }
+
     while (nprocs--) {
         /* Get the rank meta info in the shared meta segment. */
         rinfo = _get_rank_meta_info(cur_rank, meta_seg);
@@ -2687,14 +2817,14 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
              * EXTENSION slot which has key = EXTENSION_SLOT and a size_t value for offset
              * to next data address for this process.
              */
-            if (0 == strncmp(ESH_KNAME_PTR(addr), ESH_REGION_INVALIDATED, ESH_KNAME_LEN(ESH_REGION_INVALIDATED))) {
+            if (ESH_KV_INVALID(addr)) {
                 PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
                             "%s:%d:%s: for rank %s:%u, skip %s region",
                             __FILE__, __LINE__, __func__, nspace, cur_rank, ESH_REGION_INVALIDATED));
                 /* skip it
                  * go to next item, updating address */
                 addr += ESH_KV_SIZE(addr);
-            } else if (0 == strncmp(ESH_KNAME_PTR(addr), ESH_REGION_EXTENSION, ESH_KNAME_LEN(ESH_REGION_EXTENSION))) {
+            } else if ( ESH_KV_EXTSLOT(addr) ) {
                 size_t offset;
                 memcpy(&offset, ESH_DATA_PTR(addr), sizeof(size_t));
                 PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
@@ -2743,7 +2873,7 @@ static pmix_status_t _dstore_fetch(const char *nspace, pmix_rank_t rank,
 
                 kval_cnt--;
                 addr += ESH_KV_SIZE(addr);
-            } else if (0 == strncmp(ESH_KNAME_PTR(addr), key, ESH_KNAME_LEN(key))) {
+            } else if (ESH_KNAME_MATCH(addr, key, keyhash)) {
                 PMIX_OUTPUT_VERBOSE((10, pmix_gds_base_framework.framework_output,
                             "%s:%d:%s: for rank %s:%u, found target key %s",
                             __FILE__, __LINE__, __func__, nspace, cur_rank, key));
