@@ -2032,6 +2032,21 @@ static int pmix_sm_store(ns_track_elem_t *ns_info, pmix_rank_t rank, pmix_kval_t
             size_t free_offset;
             (*rinfo)->count++;
             free_offset = get_free_offset(datadesc);
+            /* Remove trailing extention slot if we are continuing same rank data */
+            if( ESH_KV_EXTSLOT(addr)){
+                seg_desc_t *ldesc = datadesc;
+                uint8_t *segstart;
+                while (NULL != ldesc->next) {
+                    ldesc = ldesc->next;
+                }
+                segstart = ldesc->seg_info.seg_base_addr;
+                if( addr > segstart && free_offset == (addr - segstart + ESH_KV_SIZE(addr))) {
+                    size_t new_offset = addr - segstart;
+                    memcpy(segstart, &new_offset, sizeof(size_t));
+                    free_offset = new_offset;
+                }
+            }
+
             /* add to the end */
             offset = put_data_to_the_end(ns_info, datadesc, kval->key, buffer.base_ptr, size);
             if (0 == offset) {
