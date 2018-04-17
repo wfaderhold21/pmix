@@ -2867,7 +2867,7 @@ static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
                 buffer.bytes_used = 0;
                 PMIX_DESTRUCT(&buffer);
                 fetch_unpack_cnt++;
-                fetch_unpack_ovh = GET_TS - start;
+                fetch_unpack_ovh += GET_TS - start;
                 key_found = true;
                 goto done;
             } else {
