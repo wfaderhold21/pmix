@@ -2487,6 +2487,18 @@ err_exit:
     return rc;
 }
 
+#include <time.h>
+#define GET_TS ({ \
+    struct timespec ts;                     \
+    double ret;                             \
+    clock_gettime(CLOCK_MONOTONIC, &ts);    \
+    ret = ts.tv_sec + 1E-9 * ts.tv_nsec;    \
+    ret;                                    \
+})
+
+static double fetch_unpack_ovh = 0;
+static int fetch_unpack_cnt = 0;
+
 static void dstore_finalize(void)
 {
     struct stat st = {0};
@@ -2515,6 +2527,11 @@ static void dstore_finalize(void)
     if (NULL != _clients_peer) {
         PMIX_RELEASE(_clients_peer->nptr);
         PMIX_RELEASE(_clients_peer);
+    }
+
+    if( fetch_unpack_cnt ) {
+        printf("Dstore unpack stat: overhead: %.9lf, count = %d, per key: %.9lf\n",
+               fetch_unpack_ovh, fetch_unpack_cnt, fetch_unpack_ovh / fetch_unpack_cnt );
     }
 }
 
@@ -2835,6 +2852,8 @@ static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
                 /* target key is found, get value */
                 uint8_t *data_ptr = ESH_DATA_PTR(addr);
                 size_t data_size = ESH_DATA_SIZE(addr, data_ptr);
+                double start = GET_TS;
+
                 PMIX_CONSTRUCT(&buffer, pmix_buffer_t);
                 PMIX_LOAD_BUFFER(_client_peer(), &buffer, data_ptr, data_size);
                 int cnt = 1;
@@ -2847,6 +2866,8 @@ static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
                 buffer.base_ptr = NULL;
                 buffer.bytes_used = 0;
                 PMIX_DESTRUCT(&buffer);
+                fetch_unpack_cnt++;
+                fetch_unpack_ovh = GET_TS - start;
                 key_found = true;
                 goto done;
             } else {
