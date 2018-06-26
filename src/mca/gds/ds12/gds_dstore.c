@@ -2609,7 +2609,7 @@ static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
     }
 
     /* grab shared lock */
-    if (PMIX_SUCCESS != (lock_rc = _ESH_RD_LOCK(ns_map->tbl_idx))) {
+    if (PMIX_SUCCESS != (lock_rc = _ESH_RDLOCK(_ESH_SESSION_lock(ns_map->tbl_idx)))) {
         /* Something wrong with the lock. The error is fatal */
         rc = PMIX_ERR_FATAL;
         PMIX_ERROR_LOG(lock_rc);
@@ -2766,7 +2766,7 @@ static pmix_status_t _dstore_fetch_fp(const char *nspace, pmix_rank_t rank,
 
 done:
     /* unset lock */
-    if (PMIX_SUCCESS != (lock_rc = _ESH_RD_UNLOCK(ns_map->tbl_idx))) {
+    if (PMIX_SUCCESS != (lock_rc = _ESH_UNLOCK(_ESH_SESSION_lock(ns_map->tbl_idx)))) {
         PMIX_ERROR_LOG(lock_rc);
     }
 
