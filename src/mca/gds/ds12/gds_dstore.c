@@ -92,7 +92,7 @@ static pmix_value_array_t *_ns_track_array = NULL;
 #define _ESH_SESSION_ns_info(tbl_idx)      (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].ns_info)
 
 #ifdef ESH_PTHREAD_LOCK
-#define _ESH_SESSION_numlocks(tbl_idx)     (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].num_locks)
+//#define _ESH_SESSION_numlocks(tbl_idx)     (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].num_locks)
 #define _ESH_SESSION_numprocs(tbl_idx)     (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].num_procs)
 #define _ESH_SESSION_numforked(tbl_idx)     (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].num_forked)
 #define _ESH_SESSION_lockidx(tbl_idx)     (PMIX_VALUE_ARRAY_GET_BASE(_session_array, session_t)[tbl_idx].lock_idx)
@@ -445,19 +445,22 @@ __extension__ ({                                            \
 #ifdef ESH_PTHREAD_LOCK
 #include <pthread.h>
 
+int my_num_locks = 0;
+int my_locks_ratio = 0;
+
 static int _esh_pthread_lock_w(int tbl_idx)
 {
-    pthread_mutex_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
-    uint32_t num_locks = _ESH_SESSION_numlocks(tbl_idx);
-    uint32_t i;
+    pthread_rwlock_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
+//    uint32_t num_locks = _ESH_SESSION_numlocks(tbl_idx);
+    int i;
 
     /* Lock the "signalling" lock first to let clients know that
      * server is going to get a write lock.
      * Clients do not hold this lock for a long time,
-     * so this loop should be relatively dast.
+     * so this loop should be relatively fast.
      */
-    for(i=0; i<num_locks; i++) {
-        pthread_mutex_lock(&locks[2*i]);
+    for(i=0; i<my_num_locks; i++) {
+        pthread_rwlock_wrlock(&locks[2*i]);
     }
 
     /* Now we can go and grab the main locks
@@ -466,8 +469,8 @@ static int _esh_pthread_lock_w(int tbl_idx)
      * We will wait here while all clients currently holding
      * locks will be done
      */
-    for(i=0; i<num_locks; i++) {
-        pthread_mutex_lock(&locks[2*i + 1]);
+    for(i=0; i<my_num_locks; i++) {
+        pthread_rwlock_wrlock(&locks[2*i + 1]);
     }
 
     /* TODO: consider rc from mutex functions */
@@ -476,15 +479,15 @@ static int _esh_pthread_lock_w(int tbl_idx)
 
 static int _esh_pthread_unlock_w(int tbl_idx)
 {
-    pthread_mutex_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
-    uint32_t num_locks = _ESH_SESSION_numlocks(tbl_idx);
-    uint32_t i;
+    pthread_rwlock_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
+    //uint32_t num_locks = _ESH_SESSION_numlocks(tbl_idx);
+    int i;
 
     /* Lock the second lock first to ensure that all procs will see
      * that we are trying to grab the main one */
-    for(i=0; i<num_locks; i++) {
-        pthread_mutex_unlock(&locks[2*i]);
-        pthread_mutex_unlock(&locks[2*i + 1]);
+    for(i=0; i<my_num_locks; i++) {
+        pthread_rwlock_unlock(&locks[2*i]);
+        pthread_rwlock_unlock(&locks[2*i + 1]);
     }
     /* TODO: consider rc from mutex functions */
     return 0;
@@ -493,20 +496,20 @@ static int _esh_pthread_unlock_w(int tbl_idx)
 
 static int _esh_pthread_lock_r(int tbl_idx)
 {
-    pthread_mutex_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
+    pthread_rwlock_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
     uint32_t idx = _ESH_SESSION_lockidx(tbl_idx);
 
     /* This mutex is only used to acquire the next one,
      * this is a barrier that server is using to let clients
      * know that it is going to grab the write lock
      */
-    pthread_mutex_lock(&locks[2 * idx]);
+    pthread_rwlock_rdlock(&locks[2 * idx]);
 
     /* Now grab the main lock */
-    pthread_mutex_lock(&locks[2*idx + 1]);
+    pthread_rwlock_rdlock(&locks[2*idx + 1]);
 
     /* Once done - release signalling lock */
-    pthread_mutex_unlock(&locks[2*idx]);
+    pthread_rwlock_unlock(&locks[2*idx]);
 
     /* TODO: consider rc from mutex functions */
     return 0;
@@ -514,11 +517,11 @@ static int _esh_pthread_lock_r(int tbl_idx)
 
 static int _esh_pthread_unlock_r(int tbl_idx)
 {
-    pthread_mutex_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
+    pthread_rwlock_t *locks = _ESH_SESSION_pthread_mutex(tbl_idx);
     uint32_t idx = _ESH_SESSION_lockidx(tbl_idx);
 
     /* Release the main lock */
-    pthread_mutex_unlock(&locks[2*idx + 1]);
+    pthread_rwlock_unlock(&locks[2*idx + 1]);
 
     /* TODO: consider rc from mutex functions */
     return 0;
@@ -763,11 +766,12 @@ static inline int _flock_init(size_t idx) {
 #endif
 
 #ifdef ESH_PTHREAD_LOCK
+
 static inline int _rwlock_init(size_t idx) {
     pmix_status_t rc = PMIX_SUCCESS;
     size_t size;
-    pthread_mutexattr_t attr;
-    uint32_t i;
+    pthread_rwlockattr_t attr;
+    int i;
     int page_size = _pmix_getpagesize();
 
 
@@ -781,65 +785,85 @@ static inline int _rwlock_init(size_t idx) {
         return rc;
     }
 
-    size = (2 * _ESH_SESSION_numlocks(idx) * sizeof(pthread_mutex_t) / page_size + 1) * page_size;
+    char *ptr = getenv("POC_NUM_LOCKS");
+    if( !ptr ) {
+        abort();
+    }
+    my_num_locks = atoi(ptr);
+
+    ptr = getenv("POC_LOCKS_RATIO");
+    if( !ptr ) {
+        abort();
+    }
+    my_locks_ratio = atoi(ptr);
+
+
+    size = (2 * my_num_locks * sizeof(pthread_mutex_t) / page_size + 1) * page_size;
 
     if (PMIX_PROC_IS_SERVER(pmix_globals.mypeer)) {
-        if (PMIX_SUCCESS != (rc = pmix_pshmem.segment_create(_ESH_SESSION_pthread_seg(idx), _ESH_SESSION_lockfile(idx), size))) {
+        rc = pmix_pshmem.segment_create(_ESH_SESSION_pthread_seg(idx),
+                                        _ESH_SESSION_lockfile(idx), size);
+        if (PMIX_SUCCESS != rc) {
             return rc;
         }
         memset(_ESH_SESSION_pthread_seg(idx)->seg_base_addr, 0, size);
         if (_ESH_SESSION_setjobuid(idx) > 0) {
-            if (0 > chown(_ESH_SESSION_lockfile(idx), (uid_t) _ESH_SESSION_jobuid(idx), (gid_t) -1)){
+            if (0 > chown(_ESH_SESSION_lockfile(idx),
+                          (uid_t) _ESH_SESSION_jobuid(idx), (gid_t) -1)){
                 rc = PMIX_ERROR;
                 PMIX_ERROR_LOG(rc);
                 return rc;
             }
             /* set the mode as required */
-            if (0 > chmod(_ESH_SESSION_lockfile(idx), S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP )) {
+            if (0 > chmod(_ESH_SESSION_lockfile(idx),
+                          S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP )) {
                 rc = PMIX_ERROR;
                 PMIX_ERROR_LOG(rc);
                 return rc;
             }
         }
-        _ESH_SESSION_pthread_mutex(idx) = (pthread_mutex_t *)_ESH_SESSION_pthread_seg(idx)->seg_base_addr;
+        _ESH_SESSION_pthread_mutex(idx) =
+                (pthread_rwlock_t *)_ESH_SESSION_pthread_seg(idx)->seg_base_addr;
 
-        if (0 != pthread_mutexattr_init(&attr)) {
+        if (0 != pthread_rwlockattr_init(&attr)) {
             rc = PMIX_ERR_INIT;
             pmix_pshmem.segment_detach(_ESH_SESSION_pthread_seg(idx));
             return rc;
         }
-        if (0 != pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED)) {
+        if (0 != pthread_rwlockattr_setpshared(&attr, PTHREAD_PROCESS_SHARED)) {
             rc = PMIX_ERR_INIT;
             pmix_pshmem.segment_detach(_ESH_SESSION_pthread_seg(idx));
-            pthread_mutexattr_destroy(&attr);
+            pthread_rwlockattr_destroy(&attr);
             return rc;
         }
 
-        for(i=0; i<_ESH_SESSION_numlocks(idx) * 2; i++) {
-            if (0 != pthread_mutex_init(&_ESH_SESSION_pthread_mutex(idx)[i], &attr)) {
+        for(i=0; i< my_num_locks * 2; i++) {
+            if (0 != pthread_rwlock_init(&_ESH_SESSION_pthread_mutex(idx)[i], &attr)) {
                 rc = PMIX_ERR_INIT;
                 pmix_pshmem.segment_detach(_ESH_SESSION_pthread_seg(idx));
-                pthread_mutexattr_destroy(&attr);
+                pthread_rwlockattr_destroy(&attr);
                 return rc;
             }
         }
-        if (0 != pthread_mutexattr_destroy(&attr)) {
+        if (0 != pthread_rwlockattr_destroy(&attr)) {
             rc = PMIX_ERR_INIT;
             return rc;
         }
     }
     else {
-        char *str;
-        if( NULL != (str = getenv(ESH_ENV_LOCK_IDX)) ) {
-            _ESH_SESSION_lockidx(idx) = strtoul(str, NULL, 10);
-        }
+        char *p = getenv("PMIX_RANK");
+        int rank = atoi(p);
+
+        _ESH_SESSION_lockidx(idx) = rank / my_locks_ratio;
+        printf("%s: using lock idx = %d\n", p, _ESH_SESSION_lockidx(idx));
+
 
         _ESH_SESSION_pthread_seg(idx)->seg_size = size;
         snprintf(_ESH_SESSION_pthread_seg(idx)->seg_name, PMIX_PATH_MAX, "%s", _ESH_SESSION_lockfile(idx));
         if (PMIX_SUCCESS != (rc = pmix_pshmem.segment_attach(_ESH_SESSION_pthread_seg(idx), PMIX_PSHMEM_RW))) {
             return rc;
         }
-        _ESH_SESSION_pthread_mutex(idx) = (pthread_mutex_t *)_ESH_SESSION_pthread_seg(idx)->seg_base_addr;
+        _ESH_SESSION_pthread_mutex(idx) = (pthread_rwlock_t *)_ESH_SESSION_pthread_seg(idx)->seg_base_addr;
     }
 
     return rc;
@@ -850,11 +874,11 @@ static inline int _rwlock_init(size_t idx) {
  */
 static inline void _rwlock_release(session_t *s) {
     pmix_status_t rc;
-    uint32_t i;
+    int i;
 
     if(PMIX_PROC_IS_SERVER(pmix_globals.mypeer)) {
-        for(i=0; i< s->num_locks * 2; i++) {
-            if (0 != pthread_mutex_destroy(&s->lock[i])) {
+        for(i=0; i< my_num_locks * 2; i++) {
+            if (0 != pthread_rwlock_destroy(&s->lock[i])) {
                 rc = PMIX_ERROR;
                 PMIX_ERROR_LOG(rc);
                 return;
@@ -1192,7 +1216,7 @@ static inline int _esh_session_init(size_t idx, ns_map_data_t *m, size_t jobuid,
     s->setjobuid = setjobuid;
     s->jobuid = jobuid;
     s->nspace_path = strdup(_base_path);
-    s->num_locks = local_size;
+//    s->num_locks = local_size;
     s->num_forked = 0;
     s->num_procs = local_size;
 
@@ -3283,8 +3307,8 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
 {
     pmix_status_t rc = PMIX_SUCCESS;
     ns_map_data_t *ns_map = NULL;
-    uint32_t num_forked, lock_idx;
-    char str[128];
+    //uint32_t num_forked, lock_idx;
+    // char str[128];
 
     pmix_output_verbose(2, pmix_gds_base_framework.framework_output,
                         "gds: dstore setup fork");
@@ -3312,6 +3336,7 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
         PMIX_ERROR_LOG(rc);
     }
 
+    /*
     sprintf(str,"%u", _ESH_SESSION_numlocks(ns_map->tbl_idx));
     if(PMIX_SUCCESS != (rc = pmix_setenv(ESH_ENV_NUMLOCKS, str, true, env))){
         PMIX_ERROR_LOG(rc);
@@ -3319,10 +3344,10 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
 
     num_forked = _ESH_SESSION_numforked(ns_map->tbl_idx);
     if( lock_distr == 0 ) {
-        /* Round robin distribution */
+        // Round robin distribution
         lock_idx = num_forked % _ESH_SESSION_numlocks(ns_map->tbl_idx);
     } else {
-        /* Block distribution */
+        // Block distribution
         uint32_t nlocks = _ESH_SESSION_numlocks(ns_map->tbl_idx);
         uint32_t numprocs = _ESH_SESSION_numprocs(ns_map->tbl_idx);
         uint32_t larger_block_cnt = numprocs % nlocks;
@@ -3336,13 +3361,13 @@ static pmix_status_t dstore_setup_fork(const pmix_proc_t *peer, char ***env)
         }
     }
 
-    /* Tell this process what lock index to use */
+    // Tell this process what lock index to use
     sprintf(str,"%u", lock_idx);
     if(PMIX_SUCCESS != (rc = pmix_setenv(ESH_ENV_LOCK_IDX, str, true, env))){
         PMIX_ERROR_LOG(rc);
     }
     _ESH_SESSION_numforked(ns_map->tbl_idx) = num_forked + 1;
-
+*/
     return rc;
 }
 
