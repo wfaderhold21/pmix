@@ -149,6 +149,7 @@ PMIX_EXPORT pmix_status_t PMIx_Get_nb(const pmix_proc_t *proc, const char key[],
     pmix_info_t *iptr;
     bool copy = false;
     pmix_value_t *ival = NULL;
+    bool need_free = false;
 
     PMIX_ACQUIRE_THREAD(&pmix_global_lock);
 
@@ -284,6 +285,7 @@ PMIX_EXPORT pmix_status_t PMIx_Get_nb(const pmix_proc_t *proc, const char key[],
                 /* guess not - better do it */
                 nfo = ninfo + 1;
                 PMIX_INFO_CREATE(iptr, nfo);
+                need_free = true;
                 for (n=0; n < ninfo; n++) {
                     PMIX_INFO_XFER(&iptr[n], &info[n]);
                 }
@@ -421,6 +423,9 @@ PMIX_EXPORT pmix_status_t PMIx_Get_nb(const pmix_proc_t *proc, const char key[],
         cb->value = ival;
         cb->cbfunc.valuefn = cbfunc;
         cb->cbdata = cbdata;
+        if (need_free) {
+            free(iptr);
+        }
         PMIX_THREADSHIFT(cb, gcbfn);
         return PMIX_SUCCESS;
     }
